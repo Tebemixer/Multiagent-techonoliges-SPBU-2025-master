@@ -6,26 +6,18 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 from matrix_generator import generate_adjacency_matrix
 from spade.agent import Agent
-from spade.behaviour import CyclicBehaviour, PeriodicBehaviour
+from spade.behaviour import CyclicBehaviour
 from spade.message import Message
 from spade.template import Template
 
-try:
-    import networkx as nx  # type: ignore
-    from networkx.generators.trees import random_tree as nx_random_tree  # type: ignore
-except ImportError:
-    nx = None
-    nx_random_tree = None
 
-
-NUM_AGENTS = 4
+NUM_AGENTS = 10
 AGENT_DOMAIN = "localhost"
 DEFAULT_PASSWORD = "password"
 KNOWLEDGE_CONVERSATION = "knowledge-sharing"
 REPORT_CONVERSATION = "final-report"
 NEIGHBOR_MESSAGE_COST = 10
 SUPERVISOR_MESSAGE_COST = 1000
-ITERATION_PERIOD = 1.0
 RECEIVE_WINDOW = 0.5
 
 
@@ -47,6 +39,72 @@ COST_TRACKER = CostTracker()
 STOP_EVENT = asyncio.Event()
 START_EVENT = asyncio.Event()
 STOP_LOCK = asyncio.Lock()
+
+
+class IterationCoordinator:
+    def __init__(self, agent_count: int) -> None:
+        self.agent_count = agent_count
+        self.iteration = 0
+        self.send_event = asyncio.Event()
+        self.process_event = asyncio.Event()
+        self.lock = asyncio.Lock()
+        self.send_counter = agent_count
+        self.process_counter = agent_count
+        self.any_updates = False
+
+    async def start(self) -> None:
+        async with self.lock:
+            self.iteration = 1
+            self.send_counter = self.agent_count
+            self.process_counter = self.agent_count
+            self.any_updates = False
+            self.send_event.clear()
+            self.process_event.clear()
+            self.send_event.set()
+
+    async def wait_for_send_phase(self) -> int:
+        await self.send_event.wait()
+        return self.iteration
+
+    async def notify_send_completed(self) -> None:
+        async with self.lock:
+            if STOP_EVENT.is_set():
+                return
+            self.send_counter -= 1
+            if self.send_counter == 0:
+                self.send_event.clear()
+                self.process_event.set()
+
+    async def wait_for_process_phase(self) -> int:
+        await self.process_event.wait()
+        return self.iteration
+
+    async def notify_process_completed(self, updated: bool) -> None:
+        async with self.lock:
+            self.process_counter -= 1
+            if STOP_EVENT.is_set():
+                if self.process_counter == 0:
+                    self.send_event.set()
+                    self.process_event.clear()
+                return
+
+            if updated:
+                self.any_updates = True
+
+            if self.process_counter == 0:
+                if self.any_updates:
+                    self.iteration += 1
+                    self.send_counter = self.agent_count
+                    self.process_counter = self.agent_count
+                    self.any_updates = False
+                    self.process_event.clear()
+                    self.send_event.set()
+                else:
+                    STOP_EVENT.set()
+                    self.send_event.set()
+
+
+COORDINATOR = IterationCoordinator(NUM_AGENTS)
 
 
 @dataclass
@@ -79,13 +137,14 @@ class NumberAgent(Agent):
         self.knowledge: Dict[str, float] = {self.identifier: self.number}
 
     async def setup(self) -> None:
-        behaviour = self.KnowledgeExchangeBehaviour(period=ITERATION_PERIOD)
+        behaviour = self.KnowledgeExchangeBehaviour()
         self.add_behaviour(behaviour)
 
-    def knowledge_payload(self) -> str:
+    def knowledge_payload(self, iteration: int) -> str:
         payload = {
             "agent_id": self.identifier,
             "knowledge": self.knowledge,
+            "iteration": iteration,
         }
         return json.dumps(payload)
 
@@ -110,10 +169,7 @@ class NumberAgent(Agent):
             }
             return json.dumps(payload)
 
-    class KnowledgeExchangeBehaviour(PeriodicBehaviour):
-        async def on_start(self) -> None:
-            self.iteration = 0
-
+    class KnowledgeExchangeBehaviour(CyclicBehaviour):
         async def run(self) -> None:
             if not START_EVENT.is_set():
                 await START_EVENT.wait()
@@ -123,17 +179,27 @@ class NumberAgent(Agent):
                 await self.agent.stop()
                 return
 
-            self.iteration += 1
-            if self.agent.lead_printer:
-                print(f"Iteration {self.iteration}")
+            iteration = await COORDINATOR.wait_for_send_phase()
 
-            payload = self.agent.knowledge_payload()
+            if STOP_EVENT.is_set():
+                self.kill()
+                await self.agent.stop()
+                return
+
+            if self.agent.lead_printer:
+                print(f"Iteration {iteration}")
+
+            payload = self.agent.knowledge_payload(iteration)
             for neighbor in self.agent.neighbor_jids:
                 msg = Message(to=neighbor)
                 msg.set_metadata("conversation", KNOWLEDGE_CONVERSATION)
                 msg.body = payload
                 await COST_TRACKER.add(NEIGHBOR_MESSAGE_COST)
                 await self.send(msg)
+
+            await COORDINATOR.notify_send_completed()
+
+            await COORDINATOR.wait_for_process_phase()
 
             loop = asyncio.get_running_loop()
             deadline = loop.time() + RECEIVE_WINDOW
@@ -151,10 +217,13 @@ class NumberAgent(Agent):
                     incoming_payload = json.loads(msg.body)
                 except (TypeError, json.JSONDecodeError):
                     continue
+                if incoming_payload.get("iteration") != iteration:
+                    continue
                 incoming_knowledge = incoming_payload.get("knowledge", {})
                 if self.agent.merge_knowledge(incoming_knowledge):
                     updated = True
 
+            report_payload: Optional[str] = None
             if not updated:
                 report_payload = await self.agent.prepare_report()
                 if report_payload is not None:
@@ -163,6 +232,10 @@ class NumberAgent(Agent):
                     msg.body = report_payload
                     await COST_TRACKER.add(SUPERVISOR_MESSAGE_COST)
                     await self.send(msg)
+
+            await COORDINATOR.notify_process_completed(updated)
+
+            if report_payload is not None or STOP_EVENT.is_set():
                 self.kill()
                 await self.agent.stop()
 
@@ -222,7 +295,6 @@ async def main() -> None:
         agent_configs.append(config)
 
     agents: List[NumberAgent] = []
-    print(f'ДЛИНА {len(agent_configs)}')
     for index, config in enumerate(agent_configs):
         neighbors = [
             agent_configs[neighbor_index].jid
@@ -241,6 +313,7 @@ async def main() -> None:
         print(f"Agent {agent.identifier} initialized with number {agent.number}")
         await agent.start(auto_register=True)
 
+    await COORDINATOR.start()
     START_EVENT.set()
 
     try:
