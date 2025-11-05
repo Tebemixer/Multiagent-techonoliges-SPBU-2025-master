@@ -1,0 +1,3 @@
+Message Pricing
+- Send to supervisor: $1000
+- Send to agent: $10
