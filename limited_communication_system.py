@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Tuple
 
 from matrix_generator import generate_adjacency_matrix
 
-NUM_AGENTS = 5
+NUM_AGENTS = 3
 NEIGHBOR_MESSAGE_COST = 10
 SUPERVISOR_MESSAGE_COST = 1000
 
@@ -18,58 +18,99 @@ class KnowledgeMessage:
 
 
 @dataclass
+class SilenceMessage:
+    sender_id: str
+    receiver_id: str
+
+
+@dataclass
 class SupervisorReport:
     agent_id: str
     average: float
     known_agents: int
 
 
-@dataclass
-class NumberAgent:
-    number: float
-    lead_printer: bool = False
-    identifier: str = field(default_factory=lambda: str(uuid.uuid4()))
-    neighbors: List["NumberAgent"] = field(default_factory=list)
-    knowledge: Dict[str, float] = field(init=False)
 
-    def __post_init__(self) -> None:
+
+class NumberAgent():
+
+    def __init__(self,   number: float) -> None:
+        self.number = number
+        self.identifier = str(uuid.uuid4())
+        self.neighbors = None
+        self.knowledge= {}
+        self.is_silent = False
+        self.pending_report = False
         self.knowledge = {self.identifier: float(self.number)}
+        self.buffer = []
+        self.death_list = []
+        self.death_real = []
 
     def set_neighbors(self, neighbors: List["NumberAgent"]) -> None:
         self.neighbors = neighbors
 
-    def compose_messages(self, iteration: int) -> List[KnowledgeMessage]:
-        payload = dict(self.knowledge)
-        messages: List[KnowledgeMessage] = []
-        for neighbor in self.neighbors:
-            messages.append(
-                KnowledgeMessage(
-                    sender_id=self.identifier,
-                    receiver_id=neighbor.identifier,
-                    iteration=iteration,
-                    knowledge=payload,
-                )
-            )
-        return messages
-
-    def process_messages(self, iteration: int, messages: List[KnowledgeMessage]) -> bool:
+    
+    def merge_knowledge(self,destination: Dict[str, float], incoming: Dict[str, float]) -> bool:
+        """Сливает числовые знания из incoming в destination.
+        Возвращает True, если появились новые ключи.
+        """
         updated = False
-        for message in messages:
-            if message.iteration != iteration:
-                continue
-            for agent_id, number in message.knowledge.items():
-                if agent_id not in self.knowledge:
-                    self.knowledge[agent_id] = float(number)
-                    updated = True
+        for agent_id, number in incoming.items():
+            if agent_id not in destination:
+                destination[agent_id] = float(number)
+                updated = True
         return updated
+    
+    def send_messages(self):
+        if self.is_silent:
+            return 0
+        cost = 0
+        if len(self.death_real)>0:
+            for neighbor in self.neighbors:
+                if neighbor.identifier not in self.death_real:
+                    neighbor.death_list.append(self.identifier)
+                    cost+=NEIGHBOR_MESSAGE_COST
+            self.is_silent = True
+            return cost
 
-    def prepare_report(self) -> SupervisorReport:
-        average = sum(self.knowledge.values()) / max(len(self.knowledge), 1)
-        return SupervisorReport(
-            agent_id=self.identifier,
-            average=average,
-            known_agents=len(self.knowledge),
-        )
+
+        if self.pending_report:
+            average = sum(self.knowledge.values()) / (len(self.knowledge.keys()))
+            for neighbor in self.neighbors:
+                neighbor.death_list.append(self.identifier)
+                cost+=NEIGHBOR_MESSAGE_COST
+            self.is_silent=True
+            print(f"{self.identifier} отправил в центр {average}")
+            return SUPERVISOR_MESSAGE_COST + cost
+        
+
+
+        for neighbor in self.neighbors:
+            neighbor.buffer.append(dict(self.knowledge))
+            cost+=NEIGHBOR_MESSAGE_COST
+        return cost
+    
+    def process_messages(self):
+        if self.is_silent:
+            return None
+        update = False
+
+        if len(self.death_list)>0:
+            self.death_real = self.death_list.copy()
+            return None
+        for message in self.buffer:
+            
+            update = self.merge_knowledge(self.knowledge,message) or update
+        self.buffer.clear()
+        if not(update):
+            self.pending_report = True
+
+
+
+
+
+
+    
 
 
 class Supervisor:
@@ -84,7 +125,7 @@ class Supervisor:
 def simulate(adjacency_matrix: List[List[int]]) -> Tuple[SupervisorReport, int]:
     supervisor = Supervisor()
     agents = [
-        NumberAgent(number=index, lead_printer=(index == 0))
+        NumberAgent(number=index)
         for index in range(len(adjacency_matrix))
     ]
 
@@ -100,52 +141,26 @@ def simulate(adjacency_matrix: List[List[int]]) -> Tuple[SupervisorReport, int]:
     iteration = 1
     total_cost = 0
     active_agents: List[NumberAgent] = list(agents)
-
-    while supervisor.report is None and active_agents:
-        lead_agent = next((agent for agent in active_agents if agent.lead_printer), None)
-        if lead_agent is not None:
-            print(f"Iteration {iteration}")
-
-        outgoing_messages: List[KnowledgeMessage] = []
-        for agent in active_agents:
-            outgoing_messages.extend(agent.compose_messages(iteration))
-
-        total_cost += len(outgoing_messages) * NEIGHBOR_MESSAGE_COST
-
-        inboxes: Dict[str, List[KnowledgeMessage]] = {agent.identifier: [] for agent in active_agents}
-        for message in outgoing_messages:
-            if message.receiver_id in inboxes:
-                inboxes[message.receiver_id].append(message)
-
-        next_active_agents: List[NumberAgent] = []
-        for agent in active_agents:
-            inbox = inboxes.get(agent.identifier, [])
-            updated = agent.process_messages(iteration, inbox)
-            if updated:
-                next_active_agents.append(agent)
-            else:
-                if supervisor.report is None:
-                    report = agent.prepare_report()
-                    supervisor.receive_report(report)
-                    total_cost += SUPERVISOR_MESSAGE_COST
-
-        if supervisor.report is not None:
+    agent_by_id = {agent.identifier: agent for agent in agents}
+    while True:
+        print('Iteration ',iteration)
+        counter_sleepers=0
+        count = 0
+        for agent_id in agent_by_id:
+            if agent_by_id[agent_id].is_silent:
+                counter_sleepers+=1
+                continue
+            count = agent_by_id[agent_id].send_messages()
+            total_cost+=count
+        for agent_id in agent_by_id:
+            agent_by_id[agent_id].process_messages()
+        if counter_sleepers==NUM_AGENTS:
             break
+        iteration+=1
+        print(f'За итерацию потрачено {count}')
+    
 
-        if not next_active_agents:
-            # All agents stalled simultaneously; the first active agent reports.
-            report = active_agents[0].prepare_report()
-            supervisor.receive_report(report)
-            total_cost += SUPERVISOR_MESSAGE_COST
-            break
-
-        active_agents = next_active_agents
-        iteration += 1
-
-    if supervisor.report is None:
-        raise RuntimeError("Supervisor did not receive a final report.")
-
-    return supervisor.report, total_cost
+    return total_cost
 
 
 def main() -> None:
@@ -154,10 +169,7 @@ def main() -> None:
     for row in adjacency_matrix:
         print(row)
 
-    report, total_cost = simulate(adjacency_matrix)
-    print(
-        f"Agent {report.agent_id} reported average {report.average} over {report.known_agents} agents."
-    )
+    total_cost = simulate(adjacency_matrix)
     print(f"Total communication cost: ${total_cost}")
 
 
