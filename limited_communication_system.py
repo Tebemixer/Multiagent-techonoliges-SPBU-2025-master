@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Tuple
 
 from matrix_generator import generate_adjacency_matrix
 
-NUM_AGENTS = 3
+NUM_AGENTS = 5
 NEIGHBOR_MESSAGE_COST = 10
 SUPERVISOR_MESSAGE_COST = 1000
 
@@ -33,7 +33,6 @@ class SupervisorReport:
 
 
 class NumberAgent():
-
     def __init__(self,   number: float) -> None:
         self.number = number
         self.identifier = str(uuid.uuid4())
@@ -113,17 +112,10 @@ class NumberAgent():
     
 
 
-class Supervisor:
-    def __init__(self) -> None:
-        self.report: Optional[SupervisorReport] = None
-
-    def receive_report(self, report: SupervisorReport) -> None:
-        if self.report is None:
-            self.report = report
 
 
-def simulate(adjacency_matrix: List[List[int]]) -> Tuple[SupervisorReport, int]:
-    supervisor = Supervisor()
+
+def simulate(adjacency_matrix: List[List[int]]) -> int:
     agents = [
         NumberAgent(number=index)
         for index in range(len(adjacency_matrix))
@@ -150,8 +142,9 @@ def simulate(adjacency_matrix: List[List[int]]) -> Tuple[SupervisorReport, int]:
             if agent_by_id[agent_id].is_silent:
                 counter_sleepers+=1
                 continue
-            count = agent_by_id[agent_id].send_messages()
-            total_cost+=count
+            buffer = agent_by_id[agent_id].send_messages()
+            count += buffer
+            total_cost+=buffer
         for agent_id in agent_by_id:
             agent_by_id[agent_id].process_messages()
         if counter_sleepers==NUM_AGENTS:
