@@ -23,14 +23,6 @@ class SilenceMessage:
     receiver_id: str
 
 
-@dataclass
-class SupervisorReport:
-    agent_id: str
-    average: float
-    known_agents: int
-
-
-
 
 class NumberAgent():
     def __init__(self,   number: float) -> None:
