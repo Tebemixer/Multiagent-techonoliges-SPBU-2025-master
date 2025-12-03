@@ -1,6 +1,5 @@
 from typing import List
 import random
-import numpy as np
 
 def generate_adjacency_matrix(count: int) -> List[List[int]]:
     if count <= 1:
@@ -37,6 +36,7 @@ def random_connected_adj_matrix(n, extra_edges=0) -> List[List[int]]:
 
 if __name__ == '__main__':
     import networkx as nx
+    import numpy as np
     A = random_connected_adj_matrix(6, extra_edges=4)
     for row in A:
         print(row)

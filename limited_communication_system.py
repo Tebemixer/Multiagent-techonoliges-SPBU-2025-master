@@ -29,7 +29,6 @@ class NumberAgent():
         self.number = number
         self.identifier = str(uuid.uuid4())
         self.neighbors = None
-        self.knowledge= {}
         self.is_silent = False
         self.pending_report = False
         self.knowledge = {self.identifier: float(self.number)}
@@ -96,6 +95,70 @@ class NumberAgent():
         if not(update):
             self.pending_report = True
 
+
+class CorruptedNumberAgent(NumberAgent):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args,**kwargs)
+        self.bash = 0
+        self._in_action = True
+        self.delayed_meassages = []
+        self.knowledge = {self.identifier: [float(self.number)]}
+        self.how_many_times = {}
+
+    def merge_knowledge(self,destination: Dict[str, float], incoming: Dict[str, float]) -> bool:
+        """Сливает числовые знания из incoming в destination.
+        Возвращает True, если появились новые ключи.
+        """
+        updated = False
+        for agent_id, number in incoming.items():
+            if agent_id not in destination:
+                destination[agent_id] = float(number)
+                self.how_many_times[agent_id] = 1
+                updated = True
+            else:
+                #обновляем среднее
+                destination[agent_id] = (destination[agent_id] * self.how_many_times[agent_id] + number) / (self.how_many_times[agent_id] + 1)
+                self.how_many_times[agent_id] +=1
+        return updated
+    
+    def send_messages(self):
+        if self.is_silent:
+            return 0
+        
+        if self.bash>=1:
+            self.bash-=1
+
+
+        if self.bash> 0:
+            return 0 
+
+
+        cost = 0
+        
+        if len(self.death_real)>0:
+            for neighbor in self.neighbors:
+                if neighbor.identifier not in self.death_real:
+                    neighbor.death_list.append(self.identifier)
+                    cost+=NEIGHBOR_MESSAGE_COST
+            self.is_silent = True
+            return cost
+
+
+        if self.pending_report:
+            average = sum(self.knowledge.values()) / (len(self.knowledge.keys()))
+            for neighbor in self.neighbors:
+                neighbor.death_list.append(self.identifier)
+                cost+=NEIGHBOR_MESSAGE_COST
+            self.is_silent=True
+            print(f"{self.identifier} отправил в центр {average}")
+            return SUPERVISOR_MESSAGE_COST + cost
+        
+
+
+        for neighbor in self.neighbors:
+            neighbor.buffer.append(dict(self.knowledge))
+            cost+=NEIGHBOR_MESSAGE_COST
+        return cost
 
 
 
