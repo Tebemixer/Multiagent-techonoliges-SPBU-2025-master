@@ -1,7 +1,8 @@
 import uuid
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
-
+import random
+import copy
 from matrix_generator import generate_adjacency_matrix
 
 NUM_AGENTS = 5
@@ -21,6 +22,12 @@ class KnowledgeMessage:
 class SilenceMessage:
     sender_id: str
     receiver_id: str
+
+
+def noisy(value: float) -> float:
+    noise = random.gauss(0, 0.03)      # или random.uniform(-0.1, 0.1)
+    noise = max(-0.1, min(0.1, noise)) # ограничиваем до ±10%
+    return value * (1 + noise)
 
 
 
@@ -101,7 +108,8 @@ class CorruptedNumberAgent(NumberAgent):
         super().__init__(*args,**kwargs)
         self.bash = 0
         self._in_action = True
-        self.delayed_meassages = []
+        self.delayed_meassages = [[],[]]
+        self.delayed_death = [[],[]]
         self.knowledge = {self.identifier: [float(self.number)]}
         self.how_many_times = {}
 
@@ -138,7 +146,15 @@ class CorruptedNumberAgent(NumberAgent):
         if len(self.death_real)>0:
             for neighbor in self.neighbors:
                 if neighbor.identifier not in self.death_real:
-                    neighbor.death_list.append(self.identifier)
+                    unluck = random.randint(1,10)
+                    if unluck ==1:
+                        unluck = random.randint(1,10)
+                        if unluck >=3:
+                            neighbor.delayed_death[0].append(self.identifier)
+                        else:
+                            neighbor.delayed_death[1].append(self.identifier)
+                    else:
+                        neighbor.death_list.append(self.identifier)
                     cost+=NEIGHBOR_MESSAGE_COST
             self.is_silent = True
             return cost
@@ -147,7 +163,15 @@ class CorruptedNumberAgent(NumberAgent):
         if self.pending_report:
             average = sum(self.knowledge.values()) / (len(self.knowledge.keys()))
             for neighbor in self.neighbors:
-                neighbor.death_list.append(self.identifier)
+                unluck = random.randint(1,10)
+                if unluck ==1:
+                    unluck = random.randint(1,10)
+                    if unluck >=3:
+                        neighbor.delayed_death[0].append(self.identifier)
+                    else:
+                        neighbor.delayed_death[1].append(self.identifier)
+                else:
+                    neighbor.death_list.append(self.identifier)
                 cost+=NEIGHBOR_MESSAGE_COST
             self.is_silent=True
             print(f"{self.identifier} отправил в центр {average}")
@@ -156,7 +180,18 @@ class CorruptedNumberAgent(NumberAgent):
 
 
         for neighbor in self.neighbors:
-            neighbor.buffer.append(dict(self.knowledge))
+            corrupted_dict = copy.deepcopy(dict(self.knowledge))
+            for x in corrupted_dict:
+                corrupted_dict[x] = noisy(corrupted_dict[x])
+            unluck = random.randint(1,10)
+            if unluck ==1:
+                unluck = random.randint(1,10)
+                if unluck >=3:
+                    neighbor.delayed_meassages[0].append(dict(corrupted_dict))
+                else:
+                    neighbor.delayed_meassages[1].append(dict(corrupted_dict))
+            else:
+                neighbor.buffer.append(dict(corrupted_dict))
             cost+=NEIGHBOR_MESSAGE_COST
         return cost
 
