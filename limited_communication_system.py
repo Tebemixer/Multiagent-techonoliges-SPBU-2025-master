@@ -24,10 +24,27 @@ class SilenceMessage:
     receiver_id: str
 
 
-def noisy(value: float) -> float:
-    noise = random.gauss(0, 0.03)      # или random.uniform(-0.1, 0.1)
-    noise = max(-0.1, min(0.1, noise)) # ограничиваем до ±10%
-    return value * (1 + noise)
+def noisy(values):
+    """Возвращает копию values со случайным множителем в пределах ±10%."""
+    noise = random.gauss(0, 0.03)
+    noise = max(-0.1, min(0.1, noise))
+    multiplier = 1 + noise
+
+    if isinstance(values, (int, float)):
+        return values * multiplier
+
+    cloned = copy.deepcopy(values)
+    if isinstance(cloned, list):
+        for index, value in enumerate(cloned):
+            cloned[index] = value * multiplier
+        return cloned
+
+    if isinstance(cloned, dict):
+        for key, value in cloned.items():
+            cloned[key] = noisy(value)
+        return cloned
+
+    return cloned
 
 
 
@@ -111,22 +128,19 @@ class CorruptedNumberAgent(NumberAgent):
         self.delayed_meassages = [[],[]]
         self.delayed_death = [[],[]]
         self.knowledge = {self.identifier: [float(self.number)]}
-        self.how_many_times = {}
 
-    def merge_knowledge(self,destination: Dict[str, float], incoming: Dict[str, float]) -> bool:
-        """Сливает числовые знания из incoming в destination.
-        Возвращает True, если появились новые ключи.
-        """
+    def merge_knowledge(self,destination: Dict[str, List[float]], incoming: Dict[str, List[float]]) -> bool:
+        """Сливает списки наблюдений, новые элементы считаем знанием."""
         updated = False
-        for agent_id, number in incoming.items():
+        for agent_id, values in incoming.items():
             if agent_id not in destination:
-                destination[agent_id] = float(number)
-                self.how_many_times[agent_id] = 1
+                destination[agent_id] = list(values)
                 updated = True
             else:
-                #обновляем среднее
-                destination[agent_id] = (destination[agent_id] * self.how_many_times[agent_id] + number) / (self.how_many_times[agent_id] + 1)
-                self.how_many_times[agent_id] +=1
+                before = len(destination[agent_id])
+                destination[agent_id].extend(values)
+                if len(destination[agent_id]) != before:
+                    updated = True
         return updated
     
     def send_messages(self):
@@ -161,7 +175,12 @@ class CorruptedNumberAgent(NumberAgent):
 
 
         if self.pending_report:
-            average = sum(self.knowledge.values()) / (len(self.knowledge.keys()))
+            per_agent_avg = [
+                sum(values) / len(values)
+                for values in self.knowledge.values()
+                if len(values) > 0
+            ]
+            average = sum(per_agent_avg) / len(per_agent_avg) if per_agent_avg else 0.0
             for neighbor in self.neighbors:
                 unluck = random.randint(1,10)
                 if unluck ==1:
@@ -194,8 +213,38 @@ class CorruptedNumberAgent(NumberAgent):
                 neighbor.buffer.append(dict(corrupted_dict))
             cost+=NEIGHBOR_MESSAGE_COST
         return cost
+    
+    def process_messages(self):
+        
+        if self.is_silent:
+            return None
+        update = False
+
+        if len(self.death_list)>0:
+            self.death_real = self.death_list.copy()
+            return None
+        for message in self.buffer:
+            
+            update = self.merge_knowledge(self.knowledge,message) or update
+        self.buffer.clear()
+        if not(update):
+            self.pending_report = True
 
 
+
+        for message in self.delayed_meassages[0]:
+            self.buffer.append(copy.deepcopy(message))
+        self.delayed_meassages[0].clear()
+        for message in self.delayed_meassages[1]:
+            self.delayed_meassages[0].append(copy.deepcopy(message))
+        self.delayed_meassages[1].clear()
+
+        for message in self.delayed_death[0]:
+            self.death_list.append(copy.deepcopy(message))
+        self.delayed_death[0].clear()
+        for message in self.delayed_death[1]:
+            self.delayed_death[0].append(copy.deepcopy(message))
+        self.delayed_death[1].clear()
 
 
 
@@ -205,11 +254,17 @@ class CorruptedNumberAgent(NumberAgent):
 
 
 
-def simulate(adjacency_matrix: List[List[int]]) -> int:
-    agents = [
-        NumberAgent(number=index)
-        for index in range(len(adjacency_matrix))
-    ]
+def simulate(adjacency_matrix: List[List[int]], normal: bool) -> int:
+    if normal:
+        agents = [
+            NumberAgent(number=index)
+            for index in range(len(adjacency_matrix))
+        ]
+    else:
+        agents = [
+            CorruptedNumberAgent(number=index)
+            for index in range(len(adjacency_matrix))
+        ]
 
     for index, agent in enumerate(agents):
         neighbors = [
@@ -252,7 +307,7 @@ def main() -> None:
     for row in adjacency_matrix:
         print(row)
 
-    total_cost = simulate(adjacency_matrix)
+    total_cost = simulate(adjacency_matrix, False)
     print(f"Total communication cost: ${total_cost}")
 
 
