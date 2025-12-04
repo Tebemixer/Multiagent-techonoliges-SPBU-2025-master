@@ -145,6 +145,7 @@ class CorruptedNumberAgent(NumberAgent):
     
     def send_messages(self):
         if self.is_silent:
+            print(f'{self.identifier} мертв' )
             return 0
         
         if self.bash>=1:
@@ -152,8 +153,9 @@ class CorruptedNumberAgent(NumberAgent):
 
 
         if self.bash> 0:
+            print(f'Агент {self.identifier} в отключке еще {self.bash}')
             return 0 
-
+        print(f'Агент {self.identifier} работает')
 
         cost = 0
         
@@ -165,8 +167,11 @@ class CorruptedNumberAgent(NumberAgent):
                         unluck = random.randint(1,10)
                         if unluck >=3:
                             neighbor.delayed_death[0].append(self.identifier)
+                            print(f'Сообщение о смерти {self.identifier} придет {neighbor.identifier} через ход')
                         else:
                             neighbor.delayed_death[1].append(self.identifier)
+                            print(f'Сообщение о смерти {self.identifier} придет {neighbor.identifier} через 2 хода')
+
                     else:
                         neighbor.death_list.append(self.identifier)
                     cost+=NEIGHBOR_MESSAGE_COST
@@ -187,8 +192,11 @@ class CorruptedNumberAgent(NumberAgent):
                     unluck = random.randint(1,10)
                     if unluck >=3:
                         neighbor.delayed_death[0].append(self.identifier)
+                        print(f'Сообщение о смерти {self.identifier} придет {neighbor.identifier} через ход')
                     else:
                         neighbor.delayed_death[1].append(self.identifier)
+                        print(f'Сообщение о смерти {self.identifier} придет {neighbor.identifier} через два хода')
+
                 else:
                     neighbor.death_list.append(self.identifier)
                 cost+=NEIGHBOR_MESSAGE_COST
@@ -207,8 +215,11 @@ class CorruptedNumberAgent(NumberAgent):
                 unluck = random.randint(1,10)
                 if unluck >=3:
                     neighbor.delayed_meassages[0].append(dict(corrupted_dict))
+                    print(f'Сообщение от {self.identifier} к {neighbor.identifier} придет через ход')
+
                 else:
                     neighbor.delayed_meassages[1].append(dict(corrupted_dict))
+                    print(f'Сообщение от {self.identifier} к {neighbor.identifier} придет через два хода')
             else:
                 neighbor.buffer.append(dict(corrupted_dict))
             cost+=NEIGHBOR_MESSAGE_COST
